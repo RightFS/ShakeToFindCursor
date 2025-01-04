@@ -33,6 +33,8 @@ class CursorConfig {
   static constexpr UINT kTrayIconId = 1;                // Tray icon ID
   static constexpr UINT kTrayIconMessage = WM_APP + 1;  // Tray message ID
   static constexpr UINT kMenuExitId = 2000;             // Exit menu item ID
+  static constexpr UINT kMenuAutoStartId = 2001;        // Enable auto-start menu item ID
+  static constexpr UINT kMenuDisableAutoStartId = 2002; // Disable auto-start menu item ID
 
   enum class MouseTrackingMode {
     kHook,    // Use SetWindowsHookEx
@@ -77,6 +79,61 @@ class Logger {
 #else
 #define DEBUG_LOG(msg)
 #endif
+
+class AutoStartManager {
+ public:
+  static bool IsAutoStartEnabled() {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                      L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
+                      KEY_READ, &hKey) != ERROR_SUCCESS) {
+      return false;
+    }
+
+    WCHAR path[MAX_PATH];
+    DWORD size = sizeof(path);
+    bool exists = RegQueryValueExW(hKey, L"ShakeToFindCursor", nullptr, nullptr,
+                                   (LPBYTE)path, &size) == ERROR_SUCCESS;
+    RegCloseKey(hKey);
+    return exists;
+  }
+
+  static bool EnableAutoStart() {
+    WCHAR exePath[MAX_PATH];
+    if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH)) {
+      return false;
+    }
+
+    // Add quotes and parameters
+    std::wstring command = L"\"" + std::wstring(exePath) + L"\"";
+
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                      L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
+                      KEY_SET_VALUE, &hKey) != ERROR_SUCCESS) {
+      return false;
+    }
+
+    LSTATUS status = RegSetValueExW(
+        hKey, L"ShakeToFindCursor", 0, REG_SZ, (LPBYTE)command.c_str(),
+        static_cast<DWORD>((command.length() + 1) * sizeof(WCHAR)));
+    RegCloseKey(hKey);
+    return status == ERROR_SUCCESS;
+  }
+
+  static bool DisableAutoStart() {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                      L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
+                      KEY_SET_VALUE, &hKey) != ERROR_SUCCESS) {
+      return false;
+    }
+
+    LSTATUS status = RegDeleteValueW(hKey, L"ShakeToFindCursor");
+    RegCloseKey(hKey);
+    return status == ERROR_SUCCESS;
+  }
+};
 
 class CursorUtils {
  public:
@@ -615,6 +672,22 @@ class ShakeToFindCursor {
       case WM_COMMAND:
         if (LOWORD(wParam) == CursorConfig::kMenuExitId) {
           instance->Stop();
+        } else if (LOWORD(wParam) == CursorConfig::kMenuAutoStartId) {
+          if (AutoStartManager::EnableAutoStart()) {
+            MessageBoxW(hwnd, L"Auto-start enabled successfully.", L"Success",
+                        MB_OK | MB_ICONINFORMATION);
+          } else {
+            MessageBoxW(hwnd, L"Failed to enable auto-start.", L"Error",
+                        MB_OK | MB_ICONERROR);
+          }
+        } else if (LOWORD(wParam) == CursorConfig::kMenuDisableAutoStartId) {
+          if (AutoStartManager::DisableAutoStart()) {
+            MessageBoxW(hwnd, L"Auto-start disabled successfully.", L"Success",
+                        MB_OK | MB_ICONINFORMATION);
+          } else {
+            MessageBoxW(hwnd, L"Failed to disable auto-start.", L"Error",
+                        MB_OK | MB_ICONERROR);
+          }
         }
         return 0;
     }
@@ -647,11 +720,18 @@ class ShakeToFindCursor {
     HMENU menu = CreatePopupMenu();
     if (!menu) return;
 
+    bool is_auto_start = AutoStartManager::IsAutoStartEnabled();
+    if (is_auto_start) {
+      AppendMenuW(menu, MF_STRING, CursorConfig::kMenuDisableAutoStartId,
+                  L"Disable Auto-start");
+    } else {
+      AppendMenuW(menu, MF_STRING, CursorConfig::kMenuAutoStartId,
+                  L"Enable Auto-start");
+    }
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, CursorConfig::kMenuExitId, L"Exit");
 
-    // Set as foreground window, otherwise the right-click menu will not show
     SetForegroundWindow(hwnd);
-
     TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
     DestroyMenu(menu);
   }
