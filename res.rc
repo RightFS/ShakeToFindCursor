@@ -21,11 +21,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "0CCh\0"
             VALUE "FileDescription", "Shake to Find Cursor\0"
-            VALUE "FileVersion", "1.0.0.0\0"
+            VALUE "FileVersion", "1.1.0.0\0"
             VALUE "InternalName", "ShakeToFindCursor\0"
             VALUE "OriginalFilename", "ShakeToFindCursor.exe\0"
             VALUE "ProductName", "Shake to Find Cursor\0"
-            VALUE "ProductVersion", "1.0.0.0\0"
+            VALUE "ProductVersion", "1.1.0.0\0"
         END
     END
     BLOCK "VarFileInfo"
