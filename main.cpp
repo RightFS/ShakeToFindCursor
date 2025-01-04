@@ -18,8 +18,6 @@
 
 // clang-format on
 
-#pragma comment(lib, "User32.lib")
-
 // Configuration class to manage all configurable parameters
 class CursorConfig {
  public:
