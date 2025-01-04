@@ -10,6 +10,8 @@ if(NOT WIN32)
     message(FATAL_ERROR "This project only supports Windows platform")
 endif()
 
+add_definitions(-DUNICODE -D_UNICODE)
+
 add_executable(${PROJECT_NAME} 
     WIN32 
     main.cpp

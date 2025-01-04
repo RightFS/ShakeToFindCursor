@@ -13,6 +13,7 @@
 #include <memory>
 #include <sstream>
 #include <deque>
+#include <vector>
 #include <stdexcept>
 #include "resource.h"
 
@@ -202,14 +203,15 @@ HCURSOR GetSystemArrowCursor() {
   return nullptr;
 }
 
-// Cursor state management class
-class CursorState {
+// Large cursor class
+class LargeCursor {
  public:
-  CursorState() {
-    // Save the system default cursor
-    original_cursor_ = CopyCursor(LoadCursor(nullptr, IDC_ARROW));
+  LargeCursor(LPCWSTR cursor_name, DWORD system_cursor_id)
+      : system_cursor_id_(system_cursor_id) {
+    // Load the system cursor
+    original_cursor_ = CopyCursor(LoadCursorW(nullptr, cursor_name));
     if (!original_cursor_) {
-      throw std::runtime_error("Failed to backup original cursor");
+      throw std::runtime_error("Failed to load system cursor");
     }
 
     // Create enlarged cursor
@@ -220,12 +222,29 @@ class CursorState {
     }
   }
 
-  ~CursorState() {
-    DEBUG_LOG("CursorState destroyed");
-    // Use SystemParametersInfo to restore all system cursors
-    if (SystemParametersInfo(SPI_SETCURSORS, 0, nullptr, SPIF_SENDCHANGE)) {
-      is_enlarged_ = false;
+  void Enlarge() {
+    if (large_cursor_) {
+      HCURSOR cursor_copy = CopyCursor(large_cursor_);
+      if (cursor_copy) {
+        SetSystemCursor(cursor_copy, system_cursor_id_);
+      } else {
+        DestroyCursor(cursor_copy);
+      }
     }
+  }
+
+  void Restore() {
+    if (original_cursor_) {
+      HCURSOR cursor_copy = CopyCursor(original_cursor_);
+      if (cursor_copy) {
+        SetSystemCursor(cursor_copy, system_cursor_id_);
+      } else {
+        DestroyCursor(cursor_copy);
+      }
+    }
+  }
+
+  ~LargeCursor() {
     if (original_cursor_) {
       DestroyCursor(original_cursor_);
     }
@@ -234,18 +253,77 @@ class CursorState {
     }
   }
 
+ private:
+  DWORD system_cursor_id_;
+  HCURSOR original_cursor_ = nullptr;
+  HCURSOR large_cursor_ = nullptr;
+};
+
+// Large cursor manager class
+class LargeCursorManager {
+ public:
+  LargeCursorManager() {
+    // Create large cursor for each system cursor
+    large_cursors_.push_back(
+        std::make_unique<LargeCursor>(IDC_ARROW, OCR_NORMAL));
+    large_cursors_.push_back(
+        std::make_unique<LargeCursor>(IDC_IBEAM, OCR_IBEAM));
+    large_cursors_.push_back(std::make_unique<LargeCursor>(IDC_WAIT, OCR_WAIT));
+    large_cursors_.push_back(
+        std::make_unique<LargeCursor>(IDC_CROSS, OCR_CROSS));
+    large_cursors_.push_back(
+        std::make_unique<LargeCursor>(IDC_UPARROW, OCR_UP));
+    large_cursors_.push_back(
+        std::make_unique<LargeCursor>(IDC_SIZENWSE, OCR_SIZENWSE));
+    large_cursors_.push_back(
+        std::make_unique<LargeCursor>(IDC_SIZENESW, OCR_SIZENESW));
+    large_cursors_.push_back(
+        std::make_unique<LargeCursor>(IDC_SIZEWE, OCR_SIZEWE));
+    large_cursors_.push_back(
+        std::make_unique<LargeCursor>(IDC_SIZENS, OCR_SIZENS));
+    large_cursors_.push_back(
+        std::make_unique<LargeCursor>(IDC_SIZEALL, OCR_SIZEALL));
+    large_cursors_.push_back(std::make_unique<LargeCursor>(IDC_NO, OCR_NO));
+    large_cursors_.push_back(std::make_unique<LargeCursor>(IDC_HAND, OCR_HAND));
+    large_cursors_.push_back(
+        std::make_unique<LargeCursor>(IDC_APPSTARTING, OCR_APPSTARTING));
+  }
+
+  void EnlargeAll() {
+    for (const auto& cursor : large_cursors_) {
+      cursor->Enlarge();
+    }
+  }
+
+  void RestoreAll() {
+    for (const auto& cursor : large_cursors_) {
+      cursor->Restore();
+    }
+  }
+
+ private:
+  std::vector<std::unique_ptr<LargeCursor>> large_cursors_;
+};
+
+// Cursor state management class
+class CursorState {
+ public:
+  CursorState() {}
+
+  ~CursorState() {
+    DEBUG_LOG("CursorState destroyed");
+    // Use SystemParametersInfo to restore all system cursors
+    if (SystemParametersInfo(SPI_SETCURSORS, 0, nullptr, SPIF_SENDCHANGE)) {
+      is_enlarged_ = false;
+    }
+  }
+
   void Enlarge() {
     if (!is_enlarged_) {
-      // Create a new cursor copy for SetSystemCursor
-      HCURSOR cursor_copy = CopyCursor(large_cursor_);
-      if (cursor_copy) {
-        if (SetSystemCursor(cursor_copy, OCR_NORMAL)) {
-          is_enlarged_ = true;
-          enlarge_start_time_ = std::chrono::high_resolution_clock::now();
-        } else {
-          DestroyCursor(cursor_copy);
-        }
-      }
+      // Enlarge all system cursors
+      large_cursor_manager_.EnlargeAll();
+      is_enlarged_ = true;
+      enlarge_start_time_ = std::chrono::high_resolution_clock::now();
     }
   }
 
@@ -265,19 +343,13 @@ class CursorState {
  private:
   void RestoreOriginalCursor() {
     if (is_enlarged_) {
-      HCURSOR cursor_copy = CopyCursor(original_cursor_);
-      if (cursor_copy) {
-        if (SetSystemCursor(cursor_copy, OCR_NORMAL)) {
-          is_enlarged_ = false;
-        } else {
-          DestroyCursor(cursor_copy);
-        }
-      }
+      // Restore all system cursors
+      large_cursor_manager_.RestoreAll();
+      is_enlarged_ = false;
     }
   }
 
-  HCURSOR original_cursor_ = nullptr;
-  HCURSOR large_cursor_ = nullptr;
+  LargeCursorManager large_cursor_manager_;
   bool is_enlarged_ = false;
   std::chrono::high_resolution_clock::time_point enlarge_start_time_;
 };
