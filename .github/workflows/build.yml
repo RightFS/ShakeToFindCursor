@@ -37,7 +37,7 @@ jobs:
     - name: Package
       run: |
         mkdir publish
-        cp build/Release/*.exe publish/ || true
+        cp build/Release/ShakeToFindCursor.exe "publish/ShakeToFindCursor-${{ matrix.arch }}.exe" || true
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@v3
