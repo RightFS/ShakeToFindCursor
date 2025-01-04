@@ -98,6 +98,12 @@ class AutoStartManager {
     return exists;
   }
 
+  static bool IsWow64() {
+    BOOL is_wow64 = FALSE;
+    IsWow64Process(GetCurrentProcess(), &is_wow64);
+    return is_wow64 == TRUE;
+  }
+
   static bool EnableAutoStart() {
     WCHAR exePath[MAX_PATH];
     if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH)) {
@@ -106,6 +112,12 @@ class AutoStartManager {
 
     // Add quotes and parameters
     std::wstring command = L"\"" + std::wstring(exePath) + L"\"";
+
+#if _WIN64 || __amd64__
+    if (!EnableAutoStartWow64()) {
+      return false;
+    }
+#endif
 
     HKEY hKey;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
@@ -118,6 +130,61 @@ class AutoStartManager {
         hKey, L"ShakeToFindCursor", 0, REG_SZ, (LPBYTE)command.c_str(),
         static_cast<DWORD>((command.length() + 1) * sizeof(WCHAR)));
     RegCloseKey(hKey);
+    bool success = (status == ERROR_SUCCESS);
+    if (success) {
+      success = SetAppCompatFlags();
+    }
+    return success;
+  }
+
+  static bool EnableAutoStartWow64() {
+    WCHAR exePath[MAX_PATH];
+    if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH)) {
+      return false;
+    }
+
+    // Add quotes and parameters
+    std::wstring command = L"\"" + std::wstring(exePath) + L"\"";
+
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                      L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
+                      KEY_SET_VALUE | KEY_WOW64_32KEY,
+                      &hKey) != ERROR_SUCCESS) {
+      return false;
+    }
+
+    LSTATUS status = RegSetValueExW(
+        hKey, L"ShakeToFindCursor", 0, REG_SZ, (LPBYTE)command.c_str(),
+        static_cast<DWORD>((command.length() + 1) * sizeof(WCHAR)));
+    RegCloseKey(hKey);
+    bool success = (status == ERROR_SUCCESS);
+    if (success) {
+      success = SetAppCompatFlags();
+    }
+    return success;
+  }
+
+  static bool DisableAutoStartWow64() {
+#if _WIN64 || __amd64__
+    if (!DisableAutoStartWow64()) {
+      return false;
+    }
+#endif
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                      L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
+                      KEY_SET_VALUE | KEY_WOW64_32KEY,
+                      &hKey) != ERROR_SUCCESS) {
+      return false;
+    }
+
+    LSTATUS status = RegDeleteValueW(hKey, L"ShakeToFindCursor");
+    RegCloseKey(hKey);
+    bool success = (status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND);
+    if (success) {
+      success = ClearAppCompatFlags();
+    }
     return status == ERROR_SUCCESS;
   }
 
@@ -131,7 +198,57 @@ class AutoStartManager {
 
     LSTATUS status = RegDeleteValueW(hKey, L"ShakeToFindCursor");
     RegCloseKey(hKey);
+    bool success = (status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND);
+    if (success) {
+      success = ClearAppCompatFlags();
+    }
     return status == ERROR_SUCCESS;
+  }
+
+  static bool SetAppCompatFlags() {
+    WCHAR exePath[MAX_PATH];
+    if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH)) {
+      return false;
+    }
+
+    HKEY hKey;
+    LSTATUS status =
+        RegCreateKeyExW(HKEY_CURRENT_USER,
+                        L"Software\\Microsoft\\Windows "
+                        L"NT\\CurrentVersion\\AppCompatFlags\\Layers",
+                        0, nullptr, REG_OPTION_NON_VOLATILE, KEY_SET_VALUE,
+                        nullptr, &hKey, nullptr);
+
+    if (status != ERROR_SUCCESS) {
+      return false;
+    }
+
+    // Set RUNASADMIN flag
+    const wchar_t* value = L"~ RUNASADMIN";
+    status =
+        RegSetValueExW(hKey, exePath, 0, REG_SZ, (BYTE*)value,
+                       (static_cast<DWORD>(wcslen(value) + 1) * sizeof(WCHAR)));
+    RegCloseKey(hKey);
+    return status == ERROR_SUCCESS;
+  }
+
+  static bool ClearAppCompatFlags() {
+    WCHAR exePath[MAX_PATH];
+    if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH)) {
+      return false;
+    }
+
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                      L"Software\\Microsoft\\Windows "
+                      L"NT\\CurrentVersion\\AppCompatFlags\\Layers",
+                      0, KEY_SET_VALUE, &hKey) != ERROR_SUCCESS) {
+      return false;
+    }
+
+    LSTATUS status = RegDeleteValueW(hKey, exePath);
+    RegCloseKey(hKey);
+    return status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND;
   }
 };
 
