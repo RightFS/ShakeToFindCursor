@@ -50,15 +50,16 @@ jobs:
     runs-on: windows-latest
     steps:
     - name: Download Artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        merge-multiple: true
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        files: |
-          ShakeToFindCursor-x64/*
-          ShakeToFindCursor-x86/*
+        files: artifacts/*.exe
         draft: false
         prerelease: false
