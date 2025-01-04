@@ -3,7 +3,7 @@
 #define OEMRESOURCE
 
 // clang-format off
-#include <windows.h>
+#include <atlbase.h>
 #include <shellapi.h>
 #include <chrono>
 #include <cmath>
@@ -16,6 +16,10 @@
 #include <vector>
 #include <stdexcept>
 #include "resource.h"
+#include <taskschd.h>
+#include <comdef.h>
+#pragma comment(lib, "taskschd.lib")
+#pragma comment(lib, "comsupp.lib")
 
 
 
@@ -80,178 +84,169 @@ class Logger {
 #define DEBUG_LOG(msg)
 #endif
 
+// Auto-start manager class to enable/disable auto-start
 class AutoStartManager {
  public:
   static bool IsAutoStartEnabled() {
-    HKEY hKey;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                      L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
-                      KEY_READ, &hKey) != ERROR_SUCCESS) {
-      return false;
-    }
+    CComPtr<ITaskService> task_service;
+    HRESULT hr = task_service.CoCreateInstance(CLSID_TaskScheduler, nullptr,
+                                               CLSCTX_INPROC_SERVER);
+    if (FAILED(hr)) return false;
 
-    WCHAR path[MAX_PATH];
-    DWORD size = sizeof(path);
-    bool exists = RegQueryValueExW(hKey, L"ShakeToFindCursor", nullptr, nullptr,
-                                   (LPBYTE)path, &size) == ERROR_SUCCESS;
-    RegCloseKey(hKey);
-    return exists;
-  }
+    hr = task_service->Connect(_variant_t(), _variant_t(), _variant_t(),
+                               _variant_t());
+    if (FAILED(hr)) return false;
 
-  static bool IsWow64() {
-    BOOL is_wow64 = FALSE;
-    IsWow64Process(GetCurrentProcess(), &is_wow64);
-    return is_wow64 == TRUE;
+    CComPtr<ITaskFolder> root_folder;
+    hr = task_service->GetFolder(_bstr_t(L"\\"), &root_folder);
+    if (FAILED(hr)) return false;
+
+    CComPtr<IRegisteredTask> task;
+    hr = root_folder->GetTask(_bstr_t(L"ShakeToFindCursor"), &task);
+
+    return SUCCEEDED(hr) && task != nullptr;
   }
 
   static bool EnableAutoStart() {
-    WCHAR exePath[MAX_PATH];
-    if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH)) {
-      return false;
+    WCHAR exe_path[MAX_PATH];
+    if (!GetModuleFileNameW(nullptr, exe_path, MAX_PATH)) return false;
+
+    CComPtr<ITaskService> task_service;
+    HRESULT hr = task_service.CoCreateInstance(CLSID_TaskScheduler, nullptr,
+                                               CLSCTX_INPROC_SERVER);
+    if (FAILED(hr)) return false;
+
+    hr = task_service->Connect(_variant_t(), _variant_t(), _variant_t(),
+                               _variant_t());
+    if (FAILED(hr)) return false;
+
+    CComPtr<ITaskFolder> root_folder;
+    hr = task_service->GetFolder(_bstr_t(L"\\"), &root_folder);
+    if (FAILED(hr)) return false;
+
+    // Delete existing task if present
+    root_folder->DeleteTask(_bstr_t(L"ShakeToFindCursor"), 0);
+
+    CComPtr<ITaskDefinition> task;
+    hr = task_service->NewTask(0, &task);
+    if (FAILED(hr)) return false;
+
+    // Set general info
+    CComPtr<IRegistrationInfo> reg_info;
+    hr = task->get_RegistrationInfo(&reg_info);
+    if (SUCCEEDED(hr)) {
+      reg_info->put_Author(_bstr_t(L"ShakeToFindCursor"));
+      reg_info->put_Description(
+          _bstr_t(L"Auto-start ShakeToFindCursor with elevated privileges"));
     }
 
-    // Add quotes and parameters
-    std::wstring command = L"\"" + std::wstring(exePath) + L"\"";
-
-#if _WIN64 || __amd64__
-    if (!EnableAutoStartWow64()) {
-      return false;
-    }
-#endif
-
-    HKEY hKey;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                      L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
-                      KEY_SET_VALUE, &hKey) != ERROR_SUCCESS) {
-      return false;
+    // Set principal (run with highest privileges)
+    CComPtr<IPrincipal> principal;
+    hr = task->get_Principal(&principal);
+    if (SUCCEEDED(hr)) {
+      principal->put_RunLevel(TASK_RUNLEVEL_HIGHEST);
+      principal->put_LogonType(TASK_LOGON_INTERACTIVE_TOKEN);
     }
 
-    LSTATUS status = RegSetValueExW(
-        hKey, L"ShakeToFindCursor", 0, REG_SZ, (LPBYTE)command.c_str(),
-        static_cast<DWORD>((command.length() + 1) * sizeof(WCHAR)));
-    RegCloseKey(hKey);
-    bool success = (status == ERROR_SUCCESS);
-    if (success) {
-      success = SetAppCompatFlags();
-    }
-    return success;
-  }
-
-  static bool EnableAutoStartWow64() {
-    WCHAR exePath[MAX_PATH];
-    if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH)) {
-      return false;
-    }
-
-    // Add quotes and parameters
-    std::wstring command = L"\"" + std::wstring(exePath) + L"\"";
-
-    HKEY hKey;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                      L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
-                      KEY_SET_VALUE | KEY_WOW64_32KEY,
-                      &hKey) != ERROR_SUCCESS) {
-      return false;
+    // Configure settings
+    CComPtr<ITaskSettings> settings;
+    hr = task->get_Settings(&settings);
+    if (SUCCEEDED(hr)) {
+      settings->put_StartWhenAvailable(VARIANT_TRUE);
+      settings->put_DisallowStartIfOnBatteries(VARIANT_FALSE);
+      settings->put_StopIfGoingOnBatteries(VARIANT_FALSE);
+      settings->put_ExecutionTimeLimit(_bstr_t(L"PT0S"));  // No time limit
+      settings->put_Hidden(VARIANT_FALSE);
+      settings->put_Priority(5);  // Above normal priority
+      settings->put_RunOnlyIfNetworkAvailable(VARIANT_FALSE);
+      settings->put_WakeToRun(VARIANT_TRUE);
+      settings->put_AllowHardTerminate(VARIANT_TRUE);
+      settings->put_Enabled(VARIANT_TRUE);
     }
 
-    LSTATUS status = RegSetValueExW(
-        hKey, L"ShakeToFindCursor", 0, REG_SZ, (LPBYTE)command.c_str(),
-        static_cast<DWORD>((command.length() + 1) * sizeof(WCHAR)));
-    RegCloseKey(hKey);
-    bool success = (status == ERROR_SUCCESS);
-    if (success) {
-      success = SetAppCompatFlags();
-    }
-    return success;
-  }
+    // Create triggers
+    CComPtr<ITriggerCollection> trigger_collection;
+    hr = task->get_Triggers(&trigger_collection);
+    if (SUCCEEDED(hr)) {
+      // Add logon trigger
+      CComPtr<ITrigger> logon_trigger;
+      if (SUCCEEDED(
+              trigger_collection->Create(TASK_TRIGGER_LOGON, &logon_trigger))) {
+        CComQIPtr<ILogonTrigger> logon(logon_trigger);
+        if (logon) {
+          logon->put_Id(_bstr_t(L"LogonTriggerId"));
+          logon->put_Enabled(VARIANT_TRUE);
+          // Add a small delay to ensure shell is ready
+          logon->put_Delay(_bstr_t(L"PT10S"));
+        }
+      }
 
-  static bool DisableAutoStartWow64() {
-#if _WIN64 || __amd64__
-    if (!DisableAutoStartWow64()) {
-      return false;
-    }
-#endif
-    HKEY hKey;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                      L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
-                      KEY_SET_VALUE | KEY_WOW64_32KEY,
-                      &hKey) != ERROR_SUCCESS) {
-      return false;
+      // Add boot trigger
+      CComPtr<ITrigger> boot_trigger;
+      if (SUCCEEDED(
+              trigger_collection->Create(TASK_TRIGGER_BOOT, &boot_trigger))) {
+        CComQIPtr<IBootTrigger> boot(boot_trigger);
+        if (boot) {
+          boot->put_Id(_bstr_t(L"BootTriggerId"));
+          boot->put_Enabled(VARIANT_TRUE);
+          // Add a delay after boot
+          boot->put_Delay(_bstr_t(L"PT60S"));
+        }
+      }
     }
 
-    LSTATUS status = RegDeleteValueW(hKey, L"ShakeToFindCursor");
-    RegCloseKey(hKey);
-    bool success = (status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND);
-    if (success) {
-      success = ClearAppCompatFlags();
+    // Create action
+    CComPtr<IActionCollection> action_collection;
+    hr = task->get_Actions(&action_collection);
+    if (SUCCEEDED(hr)) {
+      CComPtr<IAction> action;
+      hr = action_collection->Create(TASK_ACTION_EXEC, &action);
+      if (SUCCEEDED(hr)) {
+        CComQIPtr<IExecAction> exec_action(action);
+        if (exec_action) {
+          exec_action->put_Path(_bstr_t(exe_path));
+          // Set working directory
+          WCHAR work_dir[MAX_PATH];
+          wcscpy_s(work_dir, exe_path);
+          PathRemoveFileSpecW(work_dir);
+          exec_action->put_WorkingDirectory(_bstr_t(work_dir));
+        }
+      }
     }
-    return status == ERROR_SUCCESS;
+
+    // Register the task - use current user's credentials
+    CComPtr<IRegisteredTask> registered_task;
+    hr = root_folder->RegisterTaskDefinition(
+        _bstr_t(L"ShakeToFindCursor"), task, TASK_CREATE_OR_UPDATE,
+        _variant_t(),                  // Default credentials (current user)
+        _variant_t(),                  // Default password
+        TASK_LOGON_INTERACTIVE_TOKEN,  // Run only when user is logged on
+        _variant_t(L""),               // No sddl
+        &registered_task);
+
+    return SUCCEEDED(hr);
   }
 
   static bool DisableAutoStart() {
-    HKEY hKey;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                      L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", 0,
-                      KEY_SET_VALUE, &hKey) != ERROR_SUCCESS) {
-      return false;
-    }
+    CComPtr<ITaskService> task_service;
+    HRESULT hr = task_service.CoCreateInstance(CLSID_TaskScheduler, nullptr,
+                                               CLSCTX_INPROC_SERVER);
+    if (FAILED(hr)) return false;
 
-    LSTATUS status = RegDeleteValueW(hKey, L"ShakeToFindCursor");
-    RegCloseKey(hKey);
-    bool success = (status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND);
-    if (success) {
-      success = ClearAppCompatFlags();
-    }
-    return status == ERROR_SUCCESS;
-  }
+    hr = task_service->Connect(_variant_t(), _variant_t(), _variant_t(),
+                               _variant_t());
+    if (FAILED(hr)) return false;
 
-  static bool SetAppCompatFlags() {
-    WCHAR exePath[MAX_PATH];
-    if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH)) {
-      return false;
-    }
+    CComPtr<ITaskFolder> root_folder;
+    hr = task_service->GetFolder(_bstr_t(L"\\"), &root_folder);
+    if (FAILED(hr)) return false;
 
-    HKEY hKey;
-    LSTATUS status =
-        RegCreateKeyExW(HKEY_CURRENT_USER,
-                        L"Software\\Microsoft\\Windows "
-                        L"NT\\CurrentVersion\\AppCompatFlags\\Layers",
-                        0, nullptr, REG_OPTION_NON_VOLATILE, KEY_SET_VALUE,
-                        nullptr, &hKey, nullptr);
-
-    if (status != ERROR_SUCCESS) {
-      return false;
-    }
-
-    // Set RUNASADMIN flag
-    const wchar_t* value = L"~ RUNASADMIN";
-    status =
-        RegSetValueExW(hKey, exePath, 0, REG_SZ, (BYTE*)value,
-                       (static_cast<DWORD>(wcslen(value) + 1) * sizeof(WCHAR)));
-    RegCloseKey(hKey);
-    return status == ERROR_SUCCESS;
-  }
-
-  static bool ClearAppCompatFlags() {
-    WCHAR exePath[MAX_PATH];
-    if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH)) {
-      return false;
-    }
-
-    HKEY hKey;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER,
-                      L"Software\\Microsoft\\Windows "
-                      L"NT\\CurrentVersion\\AppCompatFlags\\Layers",
-                      0, KEY_SET_VALUE, &hKey) != ERROR_SUCCESS) {
-      return false;
-    }
-
-    LSTATUS status = RegDeleteValueW(hKey, exePath);
-    RegCloseKey(hKey);
-    return status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND;
+    hr = root_folder->DeleteTask(_bstr_t(L"ShakeToFindCursor"), 0);
+    return SUCCEEDED(hr);
   }
 };
 
+// Cursor utilities class
 class CursorUtils {
  public:
   static HCURSOR ScaleCursor(HCURSOR src_cursor, double scale_factor) {
@@ -626,6 +621,9 @@ class ShakeToFindCursor {
   }
 
   bool Initialize(CursorConfig::MouseTrackingMode mode) {
+    if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) {
+      throw std::runtime_error("Failed to initialize COM");
+    }
     tracking_mode_ = mode;
 
     // Register window class
@@ -737,6 +735,7 @@ class ShakeToFindCursor {
       DestroyWindow(hwnd_);
     }
     SetConsoleCtrlHandler(ConsoleCtrlHandler, FALSE);
+    CoUninitialize();
   }
 
   void ProcessMouseMove(const MSLLHOOKSTRUCT* mouse_info) {
@@ -951,6 +950,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     std::wstringstream ws;
     ws << L"Error: " << e.what();
     MessageBoxW(nullptr, ws.str().c_str(), L"Error", MB_OK | MB_ICONERROR);
+    DEBUG_LOG("Error: " + std::string(e.what()));
     SystemParametersInfo(SPI_SETCURSORS, 0, nullptr, SPIF_SENDCHANGE);
     return 1;
   }
