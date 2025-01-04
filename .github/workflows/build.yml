@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -13,7 +16,7 @@ jobs:
         arch: [x64, x86]
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Set up Visual Studio shell
       uses: egor-tensin/vs-shell@v2
@@ -51,6 +54,8 @@ jobs:
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         files: |
           ShakeToFindCursor-x64/*
