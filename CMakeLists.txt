@@ -23,7 +23,7 @@ endif()
 add_executable(${PROJECT_NAME} 
     WIN32  # 设置为 Windows GUI 应用程序
     main.cpp
-    ShakeToFindCursor.rc
+    res.rc
 )
 
 # 添加所需的 Windows 库
