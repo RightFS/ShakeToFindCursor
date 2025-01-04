@@ -21,13 +21,9 @@ endif()
 
 # 添加可执行文件
 add_executable(${PROJECT_NAME} 
+    WIN32  # 设置为 Windows GUI 应用程序
     main.cpp
-)
-
-# 设置Windows子系统
-set_target_properties(${PROJECT_NAME} 
-    PROPERTIES 
-    WIN32_EXECUTABLE FALSE  # 设置为控制台应用程序
+    ShakeToFindCursor.rc
 )
 
 # 添加所需的 Windows 库
