@@ -84,6 +84,18 @@ class Logger {
 #define DEBUG_LOG(msg)
 #endif
 
+// COM initialization class
+class ComInitializer {
+ public:
+  ComInitializer() {
+    if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) {
+      throw std::runtime_error("Failed to initialize COM");
+    }
+  }
+
+  ~ComInitializer() { CoUninitialize(); }
+};
+
 // Auto-start manager class to enable/disable auto-start
 class AutoStartManager {
  public:
@@ -885,6 +897,8 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
+  ComInitializer com_initializer;
+
   SetProcessDPIAware();
 
   CursorConfig::MouseTrackingMode mode =
@@ -926,6 +940,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                 L"Error", MB_OK | MB_ICONERROR);
     return 1;
   }
+
+  ComInitializer com_initializer;
 
   SetProcessDPIAware();
 
