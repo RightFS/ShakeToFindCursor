@@ -33,8 +33,9 @@ ShakeToFindCursor.exe --hook
 
 - Right-click the tray icon to access the menu
 - Select "Exit" to close the application
+- Or enable/disable auto-start from the menu
 
-## Auto-start Setup
+#### Auto-start Setup
 
 To have the application launch at Windows startup:
 1. Right-click the tray icon and click "Enable Auto-start."
