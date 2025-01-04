@@ -16,23 +16,20 @@
 #include <stdexcept>
 #include "resource.h"
 
-// clang-format on
+
 
 // Configuration class to manage all configurable parameters
 class CursorConfig {
  public:
-  static constexpr double kScaleFactor = 3.0;  // Cursor enlargement factor
-  static constexpr size_t kHistorySize = 10;   // Keep last 10 movements
-  static constexpr int kMinDirectionChanges =
-      5;  // Minimum direction changes required
-  static constexpr double kMinMovementSpeed =
-      800.0;                                  // Minimum speed in pixels/second
-  static constexpr int kMaxTimeWindow = 500;  // Time window in milliseconds
-  static constexpr int kEnlargeDurationMs =
-      500;  // Cursor enlargement duration (milliseconds)
-  static constexpr UINT_PTR kTimerId = 1;      // Timer ID
-  static constexpr UINT kTimerInterval = 100;  // Timer interval (milliseconds)
-  static constexpr UINT kTrayIconId = 1;       // Tray icon ID
+  static constexpr double kScaleFactor = 3.0;           // Cursor enlargement factor
+  static constexpr size_t kHistorySize = 10;            // Keep last 10 movements
+  static constexpr int kMinDirectionChanges = 5;        // Minimum direction changes required
+  static constexpr double kMinMovementSpeed = 800.0;    // Minimum speed in pixels/second
+  static constexpr int kMaxTimeWindow = 500;            // Time window in milliseconds
+  static constexpr int kEnlargeDurationMs = 500;        // Cursor enlargement duration (milliseconds)
+  static constexpr UINT_PTR kTimerId = 1;               // Timer ID
+  static constexpr UINT kTimerInterval = 100;           // Timer interval (milliseconds)
+  static constexpr UINT kTrayIconId = 1;                // Tray icon ID
   static constexpr UINT kTrayIconMessage = WM_APP + 1;  // Tray message ID
   static constexpr UINT kMenuExitId = 2000;             // Exit menu item ID
 
@@ -41,6 +38,8 @@ class CursorConfig {
     kPolling  // Use GetCursorPos in WM_TIMER
   };
 };
+
+// clang-format on
 
 class Logger {
  public:
