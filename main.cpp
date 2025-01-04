@@ -12,6 +12,7 @@
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <deque>
 #include <stdexcept>
 #include "resource.h"
 
@@ -22,17 +23,25 @@
 // Configuration class to manage all configurable parameters
 class CursorConfig {
  public:
-  static constexpr double kSpeedThreshold =
-      3000.0;  // Movement speed threshold (pixels/second)
+  static constexpr double kScaleFactor = 3.0;  // Cursor enlargement factor
+  static constexpr size_t kHistorySize = 10;   // Keep last 10 movements
+  static constexpr int kMinDirectionChanges =
+      5;  // Minimum direction changes required
+  static constexpr double kMinMovementSpeed =
+      800.0;                                  // Minimum speed in pixels/second
+  static constexpr int kMaxTimeWindow = 500;  // Time window in milliseconds
   static constexpr int kEnlargeDurationMs =
-      1000;  // Cursor enlargement duration (milliseconds)
-  static constexpr int kCheckIntervalMs =
-      200;  // Shake check frequency (milliseconds)
+      500;  // Cursor enlargement duration (milliseconds)
   static constexpr UINT_PTR kTimerId = 1;      // Timer ID
   static constexpr UINT kTimerInterval = 100;  // Timer interval (milliseconds)
   static constexpr UINT kTrayIconId = 1;       // Tray icon ID
   static constexpr UINT kTrayIconMessage = WM_APP + 1;  // Tray message ID
   static constexpr UINT kMenuExitId = 2000;             // Exit menu item ID
+
+  enum class MouseTrackingMode {
+    kHook,    // Use SetWindowsHookEx
+    kPolling  // Use GetCursorPos in WM_TIMER
+  };
 };
 
 class Logger {
@@ -64,6 +73,12 @@ class Logger {
     return ss.str();
   }
 };
+
+#ifdef _DEBUG
+#define DEBUG_LOG(msg) Logger::GetInstance().Log(msg)
+#else
+#define DEBUG_LOG(msg)
+#endif
 
 class CursorUtils {
  public:
@@ -201,15 +216,15 @@ class CursorState {
     }
 
     // Create enlarged cursor
-    large_cursor_ =
-        CursorUtils::ScaleCursor(original_cursor_, 2.0);  // Enlarge by 2 times
+    large_cursor_ = CursorUtils::ScaleCursor(
+        original_cursor_, CursorConfig::kScaleFactor);  // Enlarge by 2 times
     if (!large_cursor_) {
       throw std::runtime_error("Failed to create large cursor");
     }
   }
 
   ~CursorState() {
-    Logger::GetInstance().Log("CursorState destroyed");
+    DEBUG_LOG("CursorState destroyed");
     // Use SystemParametersInfo to restore all system cursors
     if (SystemParametersInfo(SPI_SETCURSORS, 0, nullptr, SPIF_SENDCHANGE)) {
       is_enlarged_ = false;
@@ -270,7 +285,7 @@ class CursorState {
   std::chrono::high_resolution_clock::time_point enlarge_start_time_;
 };
 
-// Mouse movement detector class
+// Mouse movement detector class with shake pattern recognition
 class MouseMoveDetector {
  public:
   MouseMoveDetector() {
@@ -284,23 +299,80 @@ class MouseMoveDetector {
         std::chrono::duration_cast<std::chrono::milliseconds>(now - last_time_)
             .count();
 
-    if (delta_time > 0) {
-      double dx = static_cast<double>(current_pos.x - last_pos_.x);
-      double dy = static_cast<double>(current_pos.y - last_pos_.y);
-      double distance = std::sqrt(dx * dx + dy * dy);
-      double speed = (distance / delta_time) * 1000.0;
+    if (delta_time <= 0) return false;
 
-      last_pos_ = current_pos;
-      last_time_ = now;
+    // Calculate movement vector
+    int dx = current_pos.x - last_pos_.x;
+    int dy = current_pos.y - last_pos_.y;
 
-      return speed > CursorConfig::kSpeedThreshold;
+    // Update position history
+    movement_history_.push_back({dx, dy, delta_time});
+    if (movement_history_.size() > CursorConfig::kHistorySize) {
+      movement_history_.pop_front();
     }
-    return false;
+
+    last_pos_ = current_pos;
+    last_time_ = now;
+
+    return DetectShakePattern();
   }
 
  private:
+  struct Movement {
+    int dx;
+    int dy;
+    long long dt;
+  };
+
+  bool DetectShakePattern() {
+    if (movement_history_.size() < CursorConfig::kHistorySize) return false;
+
+    int direction_changes = 0;
+    double total_speed = 0.0;
+    long long total_time = 0;
+
+    // Previous movement direction (-1: negative, 1: positive, 0: neutral)
+    int last_x_dir = 0;
+    int last_y_dir = 0;
+
+    for (const auto& mov : movement_history_) {
+      // Calculate current direction
+      int curr_x_dir = (mov.dx > 0) ? 1 : (mov.dx < 0) ? -1 : 0;
+      int curr_y_dir = (mov.dy > 0) ? 1 : (mov.dy < 0) ? -1 : 0;
+
+      // Count direction changes
+      if (last_x_dir != 0 && curr_x_dir != 0 && last_x_dir != curr_x_dir) {
+        direction_changes++;
+      }
+      if (last_y_dir != 0 && curr_y_dir != 0 && last_y_dir != curr_y_dir) {
+        direction_changes++;
+      }
+
+      // Update last direction
+      last_x_dir = curr_x_dir;
+      last_y_dir = curr_y_dir;
+
+      // Calculate speed
+      double distance = std::sqrt(mov.dx * mov.dx + mov.dy * mov.dy);
+      double speed = (mov.dt > 0) ? (distance / mov.dt) * 1000.0 : 0;
+      total_speed += speed;
+      total_time += mov.dt;
+    }
+
+    // Check if we're within the time window
+    if (total_time > CursorConfig::kMaxTimeWindow) return false;
+
+    // Calculate average speed
+    double avg_speed = total_speed / movement_history_.size();
+
+    // Return true if we have enough direction changes and sufficient speed
+    return direction_changes >= CursorConfig::kMinDirectionChanges &&
+           avg_speed >= CursorConfig::kMinMovementSpeed;
+  }
+
   POINT last_pos_;
   std::chrono::high_resolution_clock::time_point last_time_;
+  std::deque<Movement> movement_history_;
 };
 
 class ShakeToFindCursor {
@@ -310,7 +382,9 @@ class ShakeToFindCursor {
     return instance;
   }
 
-  bool Initialize() {
+  bool Initialize(CursorConfig::MouseTrackingMode mode) {
+    tracking_mode_ = mode;
+
     // Register window class
     WNDCLASSEXW wc = {0};
     wc.cbSize = sizeof(WNDCLASSEX);
@@ -335,21 +409,27 @@ class ShakeToFindCursor {
     // Set window instance pointer
     SetWindowLongPtr(hwnd_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 
-    // Create timer
-    if (!SetTimer(hwnd_, CursorConfig::kTimerId, CursorConfig::kTimerInterval,
-                  nullptr)) {
+    // Create timer with different interval based on mode
+    UINT timer_interval =
+        (tracking_mode_ == CursorConfig::MouseTrackingMode::kPolling)
+            ? 10  // Poll more frequently when using timer
+            : CursorConfig::kTimerInterval;
+
+    if (!SetTimer(hwnd_, CursorConfig::kTimerId, timer_interval, nullptr)) {
       DestroyWindow(hwnd_);
       throw std::runtime_error("Failed to create timer");
     }
 
-    // Install mouse hook
-    mouse_hook_ =
-        SetWindowsHookEx(WH_MOUSE_LL, MouseProc, GetModuleHandle(nullptr), 0);
+    // Only install hook if using hook mode
+    if (tracking_mode_ == CursorConfig::MouseTrackingMode::kHook) {
+      mouse_hook_ =
+          SetWindowsHookEx(WH_MOUSE_LL, MouseProc, GetModuleHandle(nullptr), 0);
 
-    if (!mouse_hook_) {
-      KillTimer(hwnd_, CursorConfig::kTimerId);
-      DestroyWindow(hwnd_);
-      throw std::runtime_error("Failed to install mouse hook");
+      if (!mouse_hook_) {
+        KillTimer(hwnd_, CursorConfig::kTimerId);
+        DestroyWindow(hwnd_);
+        throw std::runtime_error("Failed to install mouse hook");
+      }
     }
 
     // Set Ctrl+C handler
@@ -443,6 +523,12 @@ class ShakeToFindCursor {
     switch (msg) {
       case WM_TIMER:
         if (wParam == CursorConfig::kTimerId && instance) {
+          if (instance->tracking_mode_ ==
+              CursorConfig::MouseTrackingMode::kPolling) {
+            POINT pt;
+            GetCursorPos(&pt);
+            instance->ProcessMouseMove(reinterpret_cast<MSLLHOOKSTRUCT*>(&pt));
+          }
           instance->cursor_state_.RestoreIfNeeded();
         }
         return 0;
@@ -507,6 +593,7 @@ class ShakeToFindCursor {
   MouseMoveDetector move_detector_;
   std::atomic<bool> running_{false};
   bool tray_icon_added_ = false;
+  CursorConfig::MouseTrackingMode tracking_mode_;
 };
 
 bool IsRunAsAdmin() {
@@ -526,7 +613,7 @@ bool IsRunAsAdmin() {
 }
 
 #ifdef CONSOLE_MODE
-int main() {
+int main(int argc, char* argv[]) {
   if (!IsRunAsAdmin()) {
     std::cerr << "This program requires administrator privileges to run."
               << std::endl;
@@ -535,9 +622,15 @@ int main() {
 
   SetProcessDPIAware();
 
+  CursorConfig::MouseTrackingMode mode =
+      CursorConfig::MouseTrackingMode::kPolling;
+  if (argc > 1 && std::string(argv[1]) == "--hook") {
+    mode = CursorConfig::MouseTrackingMode::kHook;
+  }
+
   try {
     auto& cursor_finder = ShakeToFindCursor::GetInstance();
-    if (!cursor_finder.Initialize()) {
+    if (!cursor_finder.Initialize(mode)) {
       return 1;
     }
 
@@ -571,14 +664,20 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
   SetProcessDPIAware();
 
+  CursorConfig::MouseTrackingMode mode =
+      CursorConfig::MouseTrackingMode::kPolling;
+  if (wcsstr(lpCmdLine, L"--hook")) {
+    mode = CursorConfig::MouseTrackingMode::kHook;
+  }
+
   try {
     auto& cursor_finder = ShakeToFindCursor::GetInstance();
-    if (!cursor_finder.Initialize()) {
+    if (!cursor_finder.Initialize(mode)) {
       return 1;
     }
 
-    Logger::GetInstance().Log(
-        "Shake to Find Cursor demo started. Move the mouse quickly to trigger "
+    DEBUG_LOG(
+        "Shake to Find Cursor started. Move the mouse quickly to trigger "
         "zoom.");
 
     cursor_finder.Run();
